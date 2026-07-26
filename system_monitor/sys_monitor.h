@@ -34,6 +34,9 @@
 /** Network interface to monitor. */
 #define SYS_MON_IFACE "wlan0"
 
+/** Name of the POSIX shared memory object. */
+#define SYS_MON_SHM_NAME "/sys_monitor_shm"
+
 /* ---- procfs / sysfs paths ---- */
 #define SYS_MON_STAT_PATH "/proc/stat"
 #define SYS_MON_MEMINFO_PATH "/proc/meminfo"
@@ -46,26 +49,25 @@
 /**
  * @brief Snapshot of the system metrics collected by the harvester.
  *
- * All fields are written by the harvester thread and read by the UI thread.
+ * All fields are written by the harvester thread and read by consumer apps.
  * Access MUST be guarded by the accompanying mutex.
  */
 typedef struct {
-  float cpu_load;       /**< 1-minute load average from /proc/loadavg  */
-  uint32_t mem_total_kb;     /**< Total RAM in KiB  (from /proc/meminfo)    */
-  uint32_t mem_available_kb; /**< Available RAM in KiB                       */
+  float cpu_load;       /**< CPU utilization ratio (0.0 to 1.0) from /proc/stat  */
+  uint32_t mem_total_kb;     /**< Total RAM in KiB (from /proc/meminfo)     */
+  uint32_t mem_available_kb; /**< Available RAM in KiB                        */
   float temp_celsius;        /**< SoC temperature in degrees Celsius         */
   char ip_addr[SYS_MON_IP_STR_LEN]; /**< IPv4 address string for wlan0 */
 } SystemMetrics_t;
 
 /**
- * @brief Handle that bundles metrics data with its synchronization primitive.
+ * @brief Handle that bundles metrics data with its synchronization primitive in shared memory.
  *
- * Created by sys_monitor_init() and shared between the harvester
- * and display threads.
+ * Created by sys_monitor_init() in shared memory and mapped by consumer processes.
  */
 typedef struct {
   SystemMetrics_t metrics; /**< Latest metric snapshot                    */
-  pthread_mutex_t lock;    /**< Mutex protecting @c metrics               */
+  pthread_mutex_t lock;    /**< Process-shared mutex protecting @c metrics */
 } SysMonitorCtx_t;
 
 /*==========================================================================
@@ -73,13 +75,12 @@ typedef struct {
  *=========================================================================*/
 
 /**
- * @brief  Initialise the system-monitor context.
+ * @brief  Initialise and map the system-monitor shared memory context.
  *
- * Zeroes out the metrics struct, initialises the mutex, and sets the
- * running flag to @c false.
+ * Creates POSIX shared memory, sets its size, maps it, and initialises
+ * the process-shared mutex.
  *
- * @param[out] ctx  Pointer to an uninitialized SysMonitorCtx_t.
- * @return  0 on success, -1 on failure (mutex init error).
+ * @return  Pointer to the mapped SysMonitorCtx_t on success, NULL on failure.
  */
 SysMonitorCtx_t *sys_monitor_init(void);
 /**

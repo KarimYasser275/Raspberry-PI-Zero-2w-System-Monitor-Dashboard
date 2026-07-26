@@ -31,8 +31,8 @@ volatile bool thread_running; /**< Flag to signal thread termination         */
  *=========================================================================*/
 
 /**
- * @brief  Read 1-minute load average from /proc/loadavg.
- * @return Load average on success, -1.0f on failure.
+ * @brief  Calculate CPU utilization ratio from /proc/stat.
+ * @return CPU usage ratio (0.0 to 1.0) on success, -1.0f on failure.
  */
 static float read_cpu_load(void)
 {
@@ -245,21 +245,19 @@ static void *harvester_thread(void *arg)
  *=========================================================================*/
 
 /**
- * @brief  Initialise the system-monitor context.
+ * @brief  Initialise and map the system-monitor shared memory context.
  *
- * Zeroes out the metrics struct, initialises the mutex, and sets
- * the running flag to @c false.  Must be called before any other
- * sys_monitor_*() function.
+ * Creates POSIX shared memory object @c SYS_MON_SHM_NAME, sets its size,
+ * maps it, and initialises the process-shared mutex.
  *
- * @param[out] ctx  Pointer to an uninitialised SysMonitorCtx_t.
- * @return  0 on success, -1 on failure (NULL pointer or mutex init error).
+ * @return  Pointer to the mapped SysMonitorCtx_t on success, NULL on failure.
  */
 SysMonitorCtx_t *sys_monitor_init(void)
 {
     SysMonitorCtx_t *ctx = NULL;
     int fd = 0;
 
-    fd = shm_open("/sys_monitor_shm", O_CREAT | O_RDWR, 0666);
+    fd = shm_open(SYS_MON_SHM_NAME, O_CREAT | O_RDWR, 0666);
     if(fd == -1)
     {
         perror("shm_open");
@@ -269,7 +267,7 @@ SysMonitorCtx_t *sys_monitor_init(void)
     {
         perror("ftruncate");
         close(fd);
-        shm_unlink("/sys_monitor_shm");
+        shm_unlink(SYS_MON_SHM_NAME);
         return NULL;
     }
     ctx = mmap(NULL, sizeof(SysMonitorCtx_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -277,7 +275,7 @@ SysMonitorCtx_t *sys_monitor_init(void)
     {
         perror("mmap");
         close(fd);
-        shm_unlink("/sys_monitor_shm");
+        shm_unlink(SYS_MON_SHM_NAME);
         return NULL;
     }
     close(fd);
@@ -299,9 +297,9 @@ SysMonitorCtx_t *sys_monitor_init(void)
  * temperature, and network data from procfs/sysfs and publishes
  * the results into @c ctx->metrics under the mutex.
  *
- * @pre   sys_monitor_init() has been called on @p ctx.
+ * @pre   sys_monitor_init() has been called.
  *
- * @param[in,out] ctx  Initialised context.
+ * @param[in,out] ctx  Initialised shared memory context.
  * @return  0 on success, -1 on pthread_create failure.
  */
 int sys_monitor_start(SysMonitorCtx_t *ctx)
@@ -324,13 +322,12 @@ int sys_monitor_start(SysMonitorCtx_t *ctx)
 }
 
 /**
- * @brief  Stop the harvester thread gracefully.
+ * @brief  Stop the harvester thread gracefully and unmap shared memory.
  *
- * Clears the running flag, joins the harvester thread, and
- * destroys the mutex.  After this call the context must not
- * be used unless re-initialised with sys_monitor_init().
+ * Clears the running flag, joins the harvester thread, destroys the
+ * process-shared mutex, unmaps shared memory, and unlinks the POSIX shm object.
  *
- * @param[in,out] ctx  Running context (from sys_monitor_start()).
+ * @param[in,out] ctx  Running context (from sys_monitor_init()).
  */
 void sys_monitor_stop(SysMonitorCtx_t *ctx)
 {
@@ -342,8 +339,8 @@ void sys_monitor_stop(SysMonitorCtx_t *ctx)
     thread_running = false;
     pthread_join(thread, NULL);
     pthread_mutex_destroy(&ctx->lock);
-    munmap(ctx, sizeof(SysMonitorCtx_t)); // also missing!
-    shm_unlink("/sys_monitor_shm");
+    munmap(ctx, sizeof(SysMonitorCtx_t));
+    shm_unlink(SYS_MON_SHM_NAME);
 }
 
 /**
