@@ -35,6 +35,20 @@ static void gracefull_exit(int signo);
  */
 int main(void)
 {
+    pid_t pid = fork();
+    if(pid == -1)
+    {
+        // Error
+        fprintf(stderr, "Failed to fork");
+        return EXIT_FAILURE;
+    }
+    else if(pid > 0)
+    {
+        // Parent process
+        return EXIT_SUCCESS;
+    }
+
+    setsid();
     g_sys_mon = sys_monitor_init();
     if(g_sys_mon == NULL)
     {
